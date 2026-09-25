@@ -1,6 +1,7 @@
 import unittest
+from unittest import mock
 from pathlib import Path
-from podcast_swim.server import Handler, RuntimeState, parse_args
+from podcast_swim.server import Handler, RuntimeState, open_browser, parse_args
 
 class ServerTests(unittest.TestCase):
     def test_default_device_and_settings(self):
@@ -89,3 +90,13 @@ class ServerTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=3)
                 shutil.rmtree(app.preview_dir, ignore_errors=True)
+
+    def test_open_browser_prefers_macos_open(self):
+        with mock.patch("podcast_swim.server.sys.platform", "darwin"), \
+             mock.patch("podcast_swim.server.subprocess.Popen") as popen, \
+             mock.patch("podcast_swim.server.webbrowser.open") as fallback:
+            self.assertTrue(open_browser("http://127.0.0.1:8765/#token=x"))
+            popen.assert_called_once()
+            self.assertEqual(popen.call_args.args[0][:2], ["/usr/bin/open", "http://127.0.0.1:8765/#token=x"])
+            fallback.assert_not_called()
+
