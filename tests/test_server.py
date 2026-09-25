@@ -1,4 +1,5 @@
 import unittest
+import shutil
 from unittest import mock
 from pathlib import Path
 from podcast_swim.server import Handler, RuntimeState, open_browser, parse_args
