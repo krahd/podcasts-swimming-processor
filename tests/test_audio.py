@@ -15,9 +15,13 @@ class AudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); src=root/'in.wav'; out=root/'out'
             subprocess.run([find_ffmpeg(),'-hide_banner','-loglevel','error','-y','-f','lavfi','-i','sine=frequency=440:duration=12','-c:a','pcm_s16le',str(src)],check=True)
-            tracks=process_episode(src,out,'PSP_test','swim',0.1)
+            updates=[]
+            tracks=process_episode(src,out,'PSP_test','swim',0.1,progress=updates.append)
             self.assertEqual([p.name for p in tracks],['PSP_test_p001.mp3','PSP_test_p002.mp3'])
             self.assertGreater(sum(probe_duration(p) for p in tracks),11)
+            self.assertTrue(updates)
+            self.assertGreaterEqual(updates[-1]['fraction'],0.99)
+            self.assertEqual(updates[-1]['eta_seconds'],0.0)
             # Exercise every preset through the installed FFmpeg filter parser.
             for name in PRESETS:
                 one=process_episode(src,root/name,f'PSP_{name}',name,0)

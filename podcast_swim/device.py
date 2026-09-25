@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -400,13 +401,33 @@ def reconcile(
             emit(phase="kept", episode_uuid=uuid, index=index, total=total, message=f"Already current: {episode.title}")
             continue
 
-        emit(phase="processing", episode_uuid=uuid, index=index, total=total, message=f"Processing: {episode.title}")
+        initial_overall = ((index - 1) / total) if total else 0.0
+        emit(
+            phase="processing", episode_uuid=uuid, index=index, total=total,
+            episode_progress=0.0, overall_progress=initial_overall,
+            message=f"Processing: {episode.title}",
+        )
         with tempfile.TemporaryDirectory(prefix="podcast-swim-audio-") as tmp:
             out_dir = Path(tmp)
             base = device_filename_base(
                 episode, preset_name, segment_minutes, _replacement_salt(existing)
             )
-            outputs = process_episode(Path(episode.source_path), out_dir, base, preset_name, segment_minutes)
+            def audio_progress(info: dict) -> None:
+                fraction = max(0.0, min(1.0, float(info.get("fraction", 0.0))))
+                overall = ((index - 1) + fraction) / total if total else fraction
+                emit(
+                    phase="processing", episode_uuid=uuid, index=index, total=total,
+                    episode_progress=fraction, overall_progress=overall,
+                    processed_seconds=info.get("processed_seconds"),
+                    duration_seconds=info.get("duration_seconds"),
+                    eta_seconds=info.get("eta_seconds"),
+                    message=f"Processing: {episode.title}",
+                )
+            process_args = (Path(episode.source_path), out_dir, base, preset_name, segment_minutes)
+            if "progress" in inspect.signature(process_episode).parameters:
+                outputs = process_episode(*process_args, progress=audio_progress)
+            else:
+                outputs = process_episode(*process_args)
             files = [{"name": p.name, "size": p.stat().st_size} for p in outputs]
             names = [item["name"] for item in files]
             if len(names) != len(set(names)):

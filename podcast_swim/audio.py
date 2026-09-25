@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,6 +95,80 @@ def _run(command: list[str], timeout: int) -> None:
         raise RuntimeError(f"FFmpeg failed ({result.returncode}):\n{tail}")
 
 
+def _run_with_progress(
+    command: list[str],
+    timeout: int,
+    duration_seconds: float,
+    progress=None,
+) -> None:
+    """Run FFmpeg while reporting machine-readable encode progress."""
+    if progress is None or duration_seconds <= 0:
+        _run(command, timeout)
+        return
+    progress_command = command[:-1] + ["-progress", "pipe:1", "-nostats"] + command[-1:]
+    proc = subprocess.Popen(
+        progress_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    started = time.monotonic()
+    try:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            elapsed = time.monotonic() - started
+            if elapsed > timeout:
+                proc.kill()
+                raise TimeoutError(f"FFmpeg exceeded {timeout} seconds")
+            key, sep, value = raw.strip().partition("=")
+            if not sep or key != "out_time_us":
+                continue
+            try:
+                processed = max(0.0, float(value) / 1_000_000.0)
+            except ValueError:
+                continue
+            fraction = min(1.0, processed / duration_seconds)
+            eta = None
+            if fraction >= 0.01 and elapsed > 0:
+                eta = max(0.0, elapsed * (1.0 - fraction) / fraction)
+            progress({
+                "fraction": fraction,
+                "processed_seconds": processed,
+                "duration_seconds": duration_seconds,
+                "elapsed_seconds": elapsed,
+                "eta_seconds": eta,
+            })
+        remaining = max(1.0, timeout - (time.monotonic() - started))
+        try:
+            returncode = proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            raise TimeoutError(f"FFmpeg exceeded {timeout} seconds") from exc
+        stderr = proc.stderr.read() if proc.stderr is not None else ""
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
+        if returncode:
+            raise RuntimeError(f"FFmpeg failed ({returncode}):\n{stderr[-4000:]}")
+        progress({
+            "fraction": 1.0,
+            "processed_seconds": duration_seconds,
+            "duration_seconds": duration_seconds,
+            "elapsed_seconds": time.monotonic() - started,
+            "eta_seconds": 0.0,
+        })
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None and not proc.stdout.closed:
+            proc.stdout.close()
+        if proc.stderr is not None and not proc.stderr.closed:
+            proc.stderr.close()
+
+
 
 def _packet_duration(path: Path) -> float | None:
     """Best-effort duration from packet timestamps when format probing fails.
@@ -175,6 +250,7 @@ def process_episode(
     preset_name: str = "swim",
     segment_minutes: int = 10,
     bitrate: str = "128k",
+    progress=None,
 ) -> list[Path]:
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -216,7 +292,13 @@ def process_episode(
         pattern = output_dir / f"{base_name}.mp3"
         command = common + [str(pattern)]
     # Real podcast episodes can be long; FFmpeg is local and bounded by 3h.
-    _run(command, timeout=3 * 60 * 60)
+    duration = 0.0
+    if progress is not None:
+        try:
+            duration = probe_duration(source)
+        except Exception:
+            duration = 0.0
+    _run_with_progress(command, timeout=3 * 60 * 60, duration_seconds=duration, progress=progress)
     if segment_minutes > 0:
         outputs = sorted(output_dir.glob(f"{base_name}_p*.mp3"))
         outputs = _merge_tiny_tail(outputs, float(segment_minutes) * 60.0)
