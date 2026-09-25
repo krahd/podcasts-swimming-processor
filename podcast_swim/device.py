@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -422,10 +423,11 @@ def reconcile(
                     eta_seconds=info.get("eta_seconds"),
                     message=f"Processing: {episode.title}",
                 )
-            outputs = process_episode(
-                Path(episode.source_path), out_dir, base, preset_name, segment_minutes,
-                progress=audio_progress,
-            )
+            process_args = (Path(episode.source_path), out_dir, base, preset_name, segment_minutes)
+            if "progress" in inspect.signature(process_episode).parameters:
+                outputs = process_episode(*process_args, progress=audio_progress)
+            else:
+                outputs = process_episode(*process_args)
             files = [{"name": p.name, "size": p.stat().st_size} for p in outputs]
             names = [item["name"] for item in files]
             if len(names) != len(set(names)):

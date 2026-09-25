@@ -146,6 +146,10 @@ def _run_with_progress(
             proc.kill()
             raise TimeoutError(f"FFmpeg exceeded {timeout} seconds") from exc
         stderr = proc.stderr.read() if proc.stderr is not None else ""
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
         if returncode:
             raise RuntimeError(f"FFmpeg failed ({returncode}):\n{stderr[-4000:]}")
         progress({
@@ -159,6 +163,10 @@ def _run_with_progress(
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+        if proc.stdout is not None and not proc.stdout.closed:
+            proc.stdout.close()
+        if proc.stderr is not None and not proc.stderr.closed:
+            proc.stderr.close()
 
 
 
