@@ -42,3 +42,22 @@ class CatalogTests(unittest.TestCase):
             eps=load_downloaded_episodes(db,cache)
             conn.close()
             self.assertEqual([(e.title,e.show) for e in eps],[('WAL Episode','WAL Show')])
+
+    def test_duplicate_cache_uuid_prefers_newest_deterministically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            import os
+            root=Path(tmp); cache=root/'cache'; cache.mkdir(); db=root/'db.sqlite'
+            uuid='ABCDEF00-1111-2222-3333-666666666666'
+            older=cache/f'{uuid}.mp3'; newer=cache/f'{uuid}.m4a'
+            older.write_bytes(b'old'); newer.write_bytes(b'newer')
+            os.utime(older,ns=(1_000_000_000,1_000_000_000)); os.utime(newer,ns=(2_000_000_000,2_000_000_000))
+            conn=sqlite3.connect(db)
+            conn.executescript('''
+              create table ZMTPODCAST (Z_PK integer primary key, ZTITLE text, ZAUTHOR text, ZUUID text);
+              create table ZMTEPISODE (Z_PK integer primary key, ZUUID text, ZCLEANEDTITLE text, ZTITLE text, ZAUTHOR text, ZPUBDATE real, ZDURATION real, ZPODCAST integer);
+              insert into ZMTPODCAST values (7,'Dup Show','Host','SHOW-UUID');
+              insert into ZMTEPISODE values (1,'ABCDEF00-1111-2222-3333-666666666666','Dup Episode','Raw','Guest',800000000,42,7);
+            '''); conn.commit(); conn.close()
+            eps=load_downloaded_episodes(db,cache)
+            self.assertEqual(len(eps),1)
+            self.assertEqual(Path(eps[0].source_path),newer)

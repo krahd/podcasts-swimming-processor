@@ -57,6 +57,7 @@ def _snapshot_db(db_path: Path) -> contextlib.AbstractContextManager[Path]:
             last_error: Exception | None = None
             for _ in range(2):
                 source = dest = None
+                target.unlink(missing_ok=True)
                 try:
                     # SQLite's backup API takes a consistent read snapshot and
                     # includes committed WAL contents without copying -wal/-shm
@@ -65,7 +66,9 @@ def _snapshot_db(db_path: Path) -> contextlib.AbstractContextManager[Path]:
                     dest = sqlite3.connect(target)
                     source.backup(dest)
                     dest.commit()
-                    dest.execute("PRAGMA quick_check").fetchone()
+                    check = dest.execute("PRAGMA quick_check").fetchone()
+                    if not check or str(check[0]).lower() != "ok":
+                        raise sqlite3.DatabaseError(f"snapshot quick_check failed: {check!r}")
                     last_error = None
                     break
                 except (OSError, sqlite3.Error) as exc:
@@ -87,9 +90,23 @@ def _media_by_uuid(cache_root: Path) -> dict[str, Path]:
         return result
     # Root-level UUID files are Apple Podcasts' durable downloads. Deliberately
     # do not treat Assets/StreamedMedia as downloaded episodes.
-    for child in cache_root.iterdir():
-        if child.is_file() and child.suffix.lower() in SUPPORTED_MEDIA:
-            result[child.stem.upper()] = child
+    for child in sorted(cache_root.iterdir(), key=lambda p: p.name.casefold()):
+        if not child.is_file() or child.suffix.lower() not in SUPPORTED_MEDIA:
+            continue
+        key = child.stem.upper()
+        previous = result.get(key)
+        if previous is None:
+            result[key] = child
+            continue
+        # Be deterministic if Apple briefly leaves two encodings for one UUID.
+        # Prefer the newest source, then lexical filename as a stable tie-break.
+        try:
+            child_key = (child.stat().st_mtime_ns, child.name.casefold())
+            previous_key = (previous.stat().st_mtime_ns, previous.name.casefold())
+        except FileNotFoundError:
+            continue
+        if child_key > previous_key:
+            result[key] = child
     return result
 
 
