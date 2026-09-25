@@ -99,4 +99,3 @@ class ServerTests(unittest.TestCase):
             popen.assert_called_once()
             self.assertEqual(popen.call_args.args[0][:2], ["/usr/bin/open", "http://127.0.0.1:8765/#token=x"])
             fallback.assert_not_called()
-

@@ -283,7 +283,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
-
 def open_browser(url: str) -> bool:
     """Open the local UI reliably, preferring macOS LaunchServices."""
     if sys.platform == "darwin":
