@@ -45,3 +45,19 @@ class AudioRecoveryTests(unittest.TestCase):
                 outputs=_merge_tiny_tail([a,b],600)
             self.assertEqual(outputs,[a,b])
             self.assertTrue(b.exists())
+
+
+class AudioPresetStructureTests(unittest.TestCase):
+    def test_every_preset_ends_with_explicit_limiter(self):
+        for name, p in PRESETS.items():
+            chain = p.filter_chain
+            self.assertTrue(chain.startswith("acompressor="), name)
+            self.assertIn(",loudnorm=", chain, name)
+            self.assertIn(",volume=", chain, name)
+            self.assertIn(",alimiter=", chain, name)
+            self.assertTrue(chain.endswith("level=false"), name)
+
+    def test_swim_presets_add_post_normalisation_gain(self):
+        self.assertGreater(PRESETS["swim"].final_gain_db, 0)
+        self.assertGreater(PRESETS["aggressive"].final_gain_db, PRESETS["swim"].final_gain_db)
+        self.assertLess(PRESETS["aggressive"].limiter_limit, PRESETS["swim"].limiter_limit)

@@ -18,25 +18,36 @@ class AudioPreset:
     loudness_lufs: float
     lra: float
     true_peak_db: float
+    final_gain_db: float
+    limiter_limit: float
 
     @property
     def filter_chain(self) -> str:
+        # Compress first to reduce speech crest factor, normalise perceived loudness,
+        # then apply a controlled post-normalisation gain into a brick-wall limiter.
+        # The explicit limiter is important for bone-conduction swim playback: simply
+        # asking loudnorm for a hotter target cannot exceed the available peak headroom.
         return (
             f"acompressor=threshold={self.compressor_threshold}:ratio={self.compressor_ratio}:"
             f"attack={self.attack_ms}:release={self.release_ms},"
-            f"loudnorm=I={self.loudness_lufs}:LRA={self.lra}:TP={self.true_peak_db}"
+            f"loudnorm=I={self.loudness_lufs}:LRA={self.lra}:TP={self.true_peak_db},"
+            f"volume={self.final_gain_db}dB,"
+            f"alimiter=limit={self.limiter_limit}:attack=5:release=50:level=false"
         )
 
 
 PRESETS: dict[str, AudioPreset] = {
     "normal": AudioPreset(
-        "normal", "Light compression; conventional podcast loudness", 0.10, 2.0, 20, 250, -16, 8, -1.5
+        "normal", "Light compression; conventional podcast loudness",
+        0.10, 2.0, 20, 250, -16, 8, -1.5, 0.0, 0.95
     ),
     "swim": AudioPreset(
-        "swim", "Moderate compression and extra loudness for underwater listening", 0.0631, 3.0, 10, 200, -14, 5, -1.0
+        "swim", "Compressed and limited for substantially louder underwater speech",
+        0.03, 5.0, 8, 180, -14, 5, -1.5, 3.0, 0.84
     ),
     "aggressive": AudioPreset(
-        "aggressive", "Strong compression and high loudness for especially quiet playback", 0.0398, 4.0, 5, 180, -12, 4, -1.0
+        "aggressive", "Dense compression and limiting for the quietest swim playback",
+        0.015, 8.0, 5, 160, -12.5, 4, -2.0, 4.5, 0.80
     ),
 }
 

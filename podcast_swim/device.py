@@ -15,7 +15,7 @@ from .catalog import Episode
 MANIFEST_NAME = ".podcasts-swimming-processor.json"
 PREFIX = "PSP_"
 MANIFEST_VERSION = 1
-PROCESSING_VERSION = 3
+PROCESSING_VERSION = 4
 SAFE_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
