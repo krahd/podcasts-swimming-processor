@@ -127,6 +127,76 @@ class DeviceTests(unittest.TestCase):
             with self.assertRaises(ManifestError):
                 recover_pending(d,manifest)
 
+
+    def test_same_signature_repair_uses_distinct_names_and_keeps_new_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); d=root/'device'; d.mkdir(); src=root/'source.mp3'; src.write_bytes(b'source'); e=ep(src)
+            def fake_process(source,out,base,preset_name,segment_minutes):
+                p=out/f'{base}_p001.mp3'; p.write_bytes(b'processed'); return [p]
+            with patch('podcast_swim.device.process_episode',fake_process):
+                reconcile(d,{e.uuid:e},[e.uuid],'swim',10)
+                first=next(d.glob('PSP_*.mp3')).name
+                (d/first).unlink()
+                reconcile(d,{e.uuid:e},[e.uuid],'swim',10)
+            manifest=load_manifest(d)
+            second=manifest['episodes'][e.uuid]['files'][0]['name']
+            self.assertNotEqual(first,second)
+            self.assertTrue((d/second).is_file())
+
+    def test_unknown_preset_fails_before_any_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); owned=d/'PSP_owned.mp3'; owned.write_bytes(b'x')
+            (d/MANIFEST_NAME).write_text(json.dumps({'version':1,'episodes':{'U-1':{'files':[{'name':owned.name,'size':1}]}},'pending':None,'settings':{'preset':'swim','segment_minutes':10}}))
+            with self.assertRaises(ValueError):
+                reconcile(d,{},[],'bogus',10)
+            self.assertTrue(owned.exists())
+
+    def test_manifest_rejects_unknown_preset_bool_segment_and_nonstring_uuid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp)
+            for payload in (
+                {'version':1,'episodes':{},'pending':None,'settings':{'preset':'bogus','segment_minutes':10}},
+                {'version':1,'episodes':{},'pending':None,'settings':{'preset':'swim','segment_minutes':False}},
+                {'version':1,'episodes':{1:{'files':[]}},'pending':None,'settings':{'preset':'swim','segment_minutes':10}},
+            ):
+                (d/MANIFEST_NAME).write_text(json.dumps(payload))
+                with self.assertRaises(ManifestError):
+                    load_manifest(d)
+
+    def test_pending_remove_cannot_claim_unowned_psp_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); owned=d/'PSP_owned.mp3'; other=d/'PSP_other.mp3'; owned.write_bytes(b'x'); other.write_bytes(b'y')
+            payload={'version':1,'episodes':{'U-1':{'files':[{'name':owned.name,'size':1}]}},'pending':{'type':'remove','uuid':'U-1','files':[other.name]},'settings':{'preset':'swim','segment_minutes':10}}
+            (d/MANIFEST_NAME).write_text(json.dumps(payload))
+            with self.assertRaises(ManifestError):
+                reconcile(d,{},[],'swim',10)
+            self.assertTrue(owned.exists()); self.assertTrue(other.exists())
+
+    def test_legacy_pending_overlap_preserves_final_for_safe_recheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); name='PSP_same.mp3'; target=d/name; target.write_bytes(b'new')
+            manifest={'version':1,'episodes':{'U-1':{'files':[{'name':name,'size':3}]}},'pending':{'type':'replace','uuid':'U-1','old_files':[name],'new_entry':{'files':[{'name':name,'size':3}]}},'settings':{'preset':'swim','segment_minutes':10}}
+            recovered=recover_pending(d,manifest)
+            self.assertEqual(target.read_bytes(),b'new')
+            self.assertIsNone(recovered['pending'])
+            self.assertIn('U-1',recovered['episodes'])
+
+    def test_uuid_tag_is_filename_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src=Path(tmp)/'s'; src.write_bytes(b'x')
+            e=ep(src,uuid='bad:uuid/with?chars',mtime=1)
+            name=device_filename_base(e,'swim',10)
+            self.assertNotIn(':',name); self.assertNotIn('/',name); self.assertNotIn('?',name)
+
+    def test_duplicate_managed_filename_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); name='PSP_shared.mp3'; (d/name).write_bytes(b'x')
+            payload={'version':1,'episodes':{'U-1':{'files':[{'name':name,'size':1}]},'U-2':{'files':[{'name':name,'size':1}]}},'pending':None,'settings':{'preset':'swim','segment_minutes':10}}
+            (d/MANIFEST_NAME).write_text(json.dumps(payload))
+            with self.assertRaises(ManifestError):
+                reconcile(d,{},[],'swim',10)
+            self.assertTrue((d/name).exists())
+
     def test_manifest_rejects_invalid_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             d=Path(tmp); (d/MANIFEST_NAME).write_text(json.dumps({'version':1,'episodes':{},'pending':None,'settings':{'preset':'swim','segment_minutes':999}}))

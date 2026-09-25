@@ -1,6 +1,6 @@
 # Status
 
-- **Last verified checkpoint:** Final implementation is integrated on canonical GitHub `main`; real Apple Podcasts catalogue/API smoke, a real downloaded-episode Swim preview, live RUN PLUS read-only detection, and the full automated test suite passed.
-- **Current phase/task:** COMPLETE
+- **Last verified checkpoint:** Intensive second adversarial audit fixes implemented in isolated workspace; validation pending.
+- **Current phase/task:** deep audit validation
 - **Blocking issues:** none
-- **Exact next action:** none
+- **Exact next action:** run full static, unit, integration, audio, and live read-only validation; success requires every gate to pass before integration.

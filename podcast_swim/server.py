@@ -52,6 +52,13 @@ class RuntimeState:
             self.sync_status = {"running": True, "phase": "starting", "message": "Starting sync"}
             return True
 
+    def begin_eject(self) -> bool:
+        with self.lock:
+            if self.sync_status.get("running"):
+                return False
+            self.sync_status = {"running": True, "phase": "ejecting", "message": "Ejecting device"}
+            return True
+
     def status_snapshot(self) -> dict:
         with self.lock:
             return dict(self.sync_status)
@@ -68,9 +75,14 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[web] {self.address_string()} - {fmt % args}")
 
     def _token(self) -> str:
+        header = self.headers.get("X-PSP-Token", "")
+        if header:
+            return header
         parsed = urllib.parse.urlparse(self.path)
-        query = urllib.parse.parse_qs(parsed.query)
-        return self.headers.get("X-PSP-Token", "") or (query.get("token", [""])[0])
+        if parsed.path.startswith("/preview/"):
+            query = urllib.parse.parse_qs(parsed.query)
+            return query.get("token", [""])[0]
+        return ""
 
     def _authorized(self) -> bool:
         return secrets.compare_digest(self._token(), self.app.token)
@@ -83,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.end_headers()
         self.wfile.write(body)
 
@@ -104,12 +118,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         body = path.read_bytes()
+        resolved_type = content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self.send_response(200)
-        self.send_header("Content-Type", content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Content-Type", resolved_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        if resolved_type.startswith("text/html"):
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; connect-src 'self'; media-src 'self'; "
+                "img-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'none'",
+            )
         self.end_headers()
         self.wfile.write(body)
 
@@ -129,8 +154,9 @@ class Handler(BaseHTTPRequestHandler):
                     manifest = load_manifest(self.app.device)
                     validate_manifest_paths(self.app.device, manifest)
                 except ManifestError as exc:
-                    manifest = {"episodes": {}}
+                    manifest = {"episodes": {}, "pending": None}
                     manifest_error = str(exc)
+                pending_recovery = bool(manifest.get("pending"))
                 synced = set(manifest.get("episodes", {}))
                 episode_rows = [{**e.json(), "synced": e.uuid in synced, "source_missing": False} for e in catalog.values()]
                 for uuid in sorted(synced - set(catalog)):
@@ -158,6 +184,7 @@ class Handler(BaseHTTPRequestHandler):
                     "defaults": manifest.get("settings", {"preset": "swim", "segment_minutes": 10}),
                     "status": status,
                     "manifest_error": manifest_error,
+                    "pending_recovery": pending_recovery,
                 })
             except Exception as exc:
                 self._json({"error": str(exc)}, 500)
@@ -239,16 +266,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 500)
             return
         if parsed.path == "/api/eject":
-            with self.app.lock:
-                if self.app.sync_status.get("running"):
-                    self._json({"error": "Cannot eject during sync"}, 409)
-                    return
+            if not self.app.begin_eject():
+                self._json({"error": "Cannot eject while another device operation is running"}, 409)
+                return
             try:
                 result = subprocess.run(["/usr/sbin/diskutil", "eject", str(self.app.device)], capture_output=True, text=True, timeout=30)
                 if result.returncode:
                     raise RuntimeError((result.stderr or result.stdout).strip())
+                self.app.status_update({"phase": "complete", "message": "Device ejected"})
                 self._json({"ejected": True, "message": result.stdout.strip()})
             except Exception as exc:
+                self.app.status_update({"phase": "error", "message": str(exc), "error": str(exc)})
                 self._json({"error": str(exc)}, 500)
             return
         self.send_error(404)
@@ -270,7 +298,9 @@ def main(argv=None):
     app = RuntimeState(device=args.device.expanduser())
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.app = app  # type: ignore[attr-defined]
-    url = f"http://127.0.0.1:{server.server_port}/?token={urllib.parse.quote(app.token)}"
+    # URL fragments are not sent in HTTP requests. The UI consumes and
+    # removes this bootstrap token immediately, then authenticates APIs by header.
+    url = f"http://127.0.0.1:{server.server_port}/#token={urllib.parse.quote(app.token)}"
     print(f"Podcast Swimming Processor: {url}")
     print(f"Device: {app.device}")
     if not args.no_open:
