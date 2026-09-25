@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
-import shutil
 import sqlite3
 import tempfile
 from dataclasses import dataclass, asdict
@@ -54,31 +53,28 @@ def _snapshot_db(db_path: Path) -> contextlib.AbstractContextManager[Path]:
     @contextlib.contextmanager
     def manager():
         with tempfile.TemporaryDirectory(prefix="podcast-swim-db-") as tmp:
-            tmp_path = Path(tmp)
-            target = tmp_path / "MTLibrary.sqlite"
-            # Podcasts commonly has an active WAL. Copy the database and its
-            # WAL/SHM siblings together, then open only the disposable copy.
-            # Retry once if the first snapshot races a writer.
+            target = Path(tmp) / "MTLibrary.sqlite"
             last_error: Exception | None = None
             for _ in range(2):
+                source = dest = None
                 try:
-                    shutil.copyfile(db_path, target)
-                    for suffix in ("-wal", "-shm"):
-                        src = Path(str(db_path) + suffix)
-                        dst = Path(str(target) + suffix)
-                        if src.exists():
-                            shutil.copyfile(src, dst)
-                        elif dst.exists():
-                            dst.unlink()
-                    conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=1)
-                    try:
-                        conn.execute("SELECT 1").fetchone()
-                    finally:
-                        conn.close()
+                    # SQLite's backup API takes a consistent read snapshot and
+                    # includes committed WAL contents without copying -wal/-shm
+                    # files at different instants. The source is opened read-only.
+                    source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+                    dest = sqlite3.connect(target)
+                    source.backup(dest)
+                    dest.commit()
+                    dest.execute("PRAGMA quick_check").fetchone()
                     last_error = None
                     break
                 except (OSError, sqlite3.Error) as exc:
                     last_error = exc
+                finally:
+                    if dest is not None:
+                        dest.close()
+                    if source is not None:
+                        source.close()
             if last_error:
                 raise RuntimeError(f"Could not snapshot Apple Podcasts database: {last_error}")
             yield target
@@ -141,7 +137,12 @@ def load_downloaded_episodes(
     episodes: list[Episode] = []
     for key, path in media.items():
         row = metadata.get(key)
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            # Apple Podcasts can evict a download while the catalogue is being
+            # refreshed. Skip that vanished source instead of failing the UI.
+            continue
         if row:
             title = str(row["title"] or key)
             show = str(row["show"] or "Unknown Podcast")

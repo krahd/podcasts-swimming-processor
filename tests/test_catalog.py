@@ -24,3 +24,21 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(eps[0].title,'Episode One')
             self.assertEqual(eps[0].show,'Test Show')
             self.assertEqual(eps[0].duration_seconds,1800)
+
+
+    def test_snapshot_includes_committed_wal_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); cache=root/'cache'; cache.mkdir(); db=root/'db.sqlite'
+            uuid='ABCDEF00-1111-2222-3333-555555555555'
+            (cache/f'{uuid}.mp3').write_bytes(b'abc')
+            conn=sqlite3.connect(db)
+            conn.execute('pragma journal_mode=wal')
+            conn.executescript('''
+              create table ZMTPODCAST (Z_PK integer primary key, ZTITLE text, ZAUTHOR text, ZUUID text);
+              create table ZMTEPISODE (Z_PK integer primary key, ZUUID text, ZCLEANEDTITLE text, ZTITLE text, ZAUTHOR text, ZPUBDATE real, ZDURATION real, ZPODCAST integer);
+              insert into ZMTPODCAST values (7,'WAL Show','Host','SHOW-UUID');
+              insert into ZMTEPISODE values (1,'ABCDEF00-1111-2222-3333-555555555555','WAL Episode','Raw','Guest',800000000,42,7);
+            '''); conn.commit()
+            eps=load_downloaded_episodes(db,cache)
+            conn.close()
+            self.assertEqual([(e.title,e.show) for e in eps],[('WAL Episode','WAL Show')])
