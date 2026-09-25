@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Podcast Swimming Processor</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#181818;background:#f4f4f2;line-height:1.35}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1180px;margin:auto;padding:28px 24px 80px}h1{font-size:28px;margin:0 0 4px}.sub{color:#666;margin-bottom:24px}.panel{background:white;border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0}.toolbar{display:grid;grid-template-columns:minmax(240px,1fr) auto auto auto;gap:10px;align-items:center}.toolbar input,.toolbar select,button{font:inherit;border:1px solid #bbb;border-radius:8px;padding:9px 11px;background:#fff}button{cursor:pointer}button.primary{background:#111;color:#fff;border-color:#111}button:disabled{opacity:.45;cursor:not-allowed}.device{display:flex;gap:18px;align-items:center;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:50%;display:inline-block;background:#aaa}.dot.ok{background:#278a47}.dot.bad{background:#b43a36}.grow{flex:1}.status{font-size:14px;color:#555}.status.error{color:#a02020}.episodes{margin-top:14px}.episode{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;padding:13px 8px;border-top:1px solid #ececec}.episode:first-child{border-top:0}.title{font-weight:600}.meta{font-size:13px;color:#6a6a6a;margin-top:4px}.synced{font-size:11px;background:#e8f5eb;color:#246437;border-radius:99px;padding:2px 7px;margin-left:7px}.actions{display:flex;gap:6px}.small{font-size:13px;padding:6px 8px}.summary{font-size:13px;color:#555}.progress{height:7px;background:#e8e8e8;border-radius:99px;overflow:hidden;margin-top:10px}.bar{height:100%;width:0;background:#222;transition:width .25s}.warning{background:#fff5d9;border:1px solid #e5c971;padding:10px;border-radius:8px;margin:10px 0}.hidden{display:none}@media(max-width:760px){.toolbar{grid-template-columns:1fr 1fr}.toolbar input{grid-column:1/-1}.episode{grid-template-columns:28px 1fr}.actions{grid-column:2}.device{align-items:flex-start}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Podcast Swimming Processor</h1>
+<div class="sub">Choose downloaded Apple Podcasts episodes for the Mojawa Run Plus.</div>
+<div id="warning" class="warning hidden"></div>
+<div class="panel device">
+ <span id="dot" class="dot"></span><div><strong id="deviceName">Checking device…</strong><div id="deviceDetail" class="meta"></div></div>
+ <div class="grow"></div><button id="refresh">Refresh</button><button id="eject">Eject</button>
+</div>
+<div class="panel">
+ <div class="toolbar">
+  <input id="search" type="search" placeholder="Search show or episode…">
+  <select id="preset"><option value="normal">Normal</option><option value="swim" selected>Swim</option><option value="aggressive">Aggressive</option></select>
+  <select id="segment"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option><option value="0">Whole episode</option></select>
+  <button id="apply" class="primary">Apply selection</button>
+ </div>
+ <div class="summary" style="margin-top:10px"><span id="counts"></span> · Processing: <span id="presetDesc"></span></div>
+ <div id="status" class="status" style="margin-top:12px">Ready</div><div class="progress"><div id="bar" class="bar"></div></div>
+</div>
+<div class="panel">
+ <div style="display:flex;gap:8px;align-items:center"><strong>Downloaded episodes</strong><div class="grow"></div><button id="selectVisible" class="small">Select visible</button><button id="clearVisible" class="small">Clear visible</button></div>
+ <div id="episodes" class="episodes"><div class="meta">Loading…</div></div>
+</div>
+<audio id="audio" controls class="hidden" style="position:fixed;bottom:12px;left:50%;transform:translateX(-50%);width:min(620px,90vw)"></audio>
+</div>
+<script>
+const token=new URLSearchParams(location.search).get('token')||'';
+const els=Object.fromEntries(['warning','dot','deviceName','deviceDetail','refresh','eject','search','preset','segment','apply','counts','presetDesc','status','bar','episodes','selectVisible','clearVisible','audio'].map(id=>[id,document.getElementById(id)]));
+let state=null, selected=new Set();
+const api=async(path,opts={})=>{opts.headers={...(opts.headers||{}),'X-PSP-Token':token};if(opts.body&&!opts.headers['Content-Type'])opts.headers['Content-Type']='application/json';const r=await fetch(path,opts);const j=await r.json();if(!r.ok)throw new Error(j.error||`HTTP ${r.status}`);return j};
+const fmtBytes=n=>n>1e9?`${(n/1e9).toFixed(1)} GB`:n>1e6?`${(n/1e6).toFixed(0)} MB`:`${n} B`;
+const fmtDur=s=>s?`${Math.round(s/60)} min`:'duration unknown';
+function visibleEpisodes(){const q=els.search.value.trim().toLowerCase();return (state?.episodes||[]).filter(e=>!q||`${e.show} ${e.title} ${e.author}`.toLowerCase().includes(q))}
+function render(){if(!state)return;const d=state.device;els.dot.className='dot '+(d.connected&&d.writable?'ok':'bad');els.deviceName.textContent=d.connected?'RUN PLUS connected':'RUN PLUS not connected';els.deviceDetail.textContent=d.connected?`${fmtBytes(d.free_bytes)} free · ${d.path}`:d.path;els.apply.disabled=!d.connected||!d.writable||!!state.manifest_error||state.status.running;els.eject.disabled=!d.connected||state.status.running;els.warning.classList.toggle('hidden',!state.manifest_error);els.warning.textContent=state.manifest_error?`Sync disabled: ${state.manifest_error}`:'';const items=visibleEpisodes();els.counts.textContent=`${selected.size} selected · ${items.length} shown · ${state.episodes.length} downloaded`;els.presetDesc.textContent=state.presets[els.preset.value]?.description||'';els.episodes.replaceChildren(...items.map(e=>{const row=document.createElement('div');row.className='episode';const cb=document.createElement('input');cb.type='checkbox';cb.checked=selected.has(e.uuid);cb.onchange=()=>{cb.checked?selected.add(e.uuid):selected.delete(e.uuid);renderCounts()};const text=document.createElement('div');const title=document.createElement('div');title.className='title';title.textContent=e.title;if(e.synced){const badge=document.createElement('span');badge.className='synced';badge.textContent='on device';title.appendChild(badge)}const meta=document.createElement('div');meta.className='meta';const date=e.published_at?new Date(e.published_at).toLocaleDateString():'';meta.textContent=[e.show,date,fmtDur(e.duration_seconds)].filter(Boolean).join(' · ');text.append(title,meta);const actions=document.createElement('div');actions.className='actions';const prev=document.createElement('button');prev.className='small';prev.textContent='Preview';prev.onclick=()=>preview(e.uuid,prev);actions.append(prev);row.append(cb,text,actions);return row}));renderCounts()}
+function renderCounts(){if(!state)return;els.counts.textContent=`${selected.size} selected · ${visibleEpisodes().length} shown · ${state.episodes.length} downloaded`}
+async function load(){els.refresh.disabled=true;try{state=await api(`/api/state?token=${encodeURIComponent(token)}`);selected=new Set(state.selected||[]);els.preset.value=state.defaults.preset;els.segment.value=String(state.defaults.segment_minutes);render();updateStatus(state.status)}catch(e){els.status.textContent=e.message;els.status.className='status error'}finally{els.refresh.disabled=false}}
+function updateStatus(s){els.status.textContent=s.message||s.phase||'Ready';els.status.className='status '+(s.phase==='error'?'error':'');let pct=0;if(s.total&&s.index)pct=Math.min(100,Math.round(100*s.index/s.total));else if(s.phase==='complete')pct=100;els.bar.style.width=`${pct}%`;els.apply.disabled=!!s.running||!(state?.device.connected&&state?.device.writable)||!!state?.manifest_error}
+async function poll(){try{const s=await api(`/api/status?token=${encodeURIComponent(token)}`);if(state)state.status=s;updateStatus(s);if(!s.running&&['complete','error'].includes(s.phase)){clearInterval(window.poller);window.poller=null;if(s.phase==='complete')await load()}}catch(e){updateStatus({phase:'error',message:e.message})}}
+async function preview(uuid,button){button.disabled=true;const old=button.textContent;button.textContent='Preparing…';try{const j=await api(`/api/preview?token=${encodeURIComponent(token)}`,{method:'POST',body:JSON.stringify({uuid,preset:els.preset.value})});els.audio.src=j.url;els.audio.classList.remove('hidden');await els.audio.play()}catch(e){alert(e.message)}finally{button.disabled=false;button.textContent=old}}
+els.search.oninput=render;els.preset.onchange=render;els.refresh.onclick=load;els.selectVisible.onclick=()=>{visibleEpisodes().forEach(e=>selected.add(e.uuid));render()};els.clearVisible.onclick=()=>{visibleEpisodes().forEach(e=>selected.delete(e.uuid));render()};els.apply.onclick=async()=>{if(!confirm(`Make RUN PLUS contain exactly the ${selected.size} selected managed episode(s)? Unselected app-managed podcast tracks will be deleted.`))return;try{await api(`/api/sync?token=${encodeURIComponent(token)}`,{method:'POST',body:JSON.stringify({selected:[...selected],preset:els.preset.value,segment_minutes:Number(els.segment.value)})});updateStatus({running:true,phase:'starting',message:'Starting sync…'});if(!window.poller)window.poller=setInterval(poll,800)}catch(e){alert(e.message)}};els.eject.onclick=async()=>{try{const j=await api(`/api/eject?token=${encodeURIComponent(token)}`,{method:'POST',body:'{}'});alert(j.message||'Ejected');await load()}catch(e){alert(e.message)}};
+load();
+</script></body></html>
