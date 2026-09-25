@@ -182,9 +182,7 @@ def _processing_signature(episode: Episode, preset_name: str, segment_minutes: i
     }
 
 
-def _entry_current(device: Path, entry: dict, signature: dict) -> bool:
-    if any(entry.get(k) != v for k, v in signature.items()):
-        return False
+def _entry_files_valid(device: Path, entry: dict) -> bool:
     files = entry.get("files")
     if not isinstance(files, list) or not files:
         return False
@@ -192,9 +190,19 @@ def _entry_current(device: Path, entry: dict, signature: dict) -> bool:
         if not isinstance(item, dict) or "name" not in item or "size" not in item:
             return False
         target = _owned_path(device, item["name"])
-        if not target.is_file() or target.stat().st_size != int(item["size"]):
+        try:
+            expected_size = int(item["size"])
+        except (TypeError, ValueError):
+            return False
+        if not target.is_file() or target.stat().st_size != expected_size:
             return False
     return True
+
+
+def _entry_current(device: Path, entry: dict, signature: dict) -> bool:
+    if any(entry.get(k) != v for k, v in signature.items()):
+        return False
+    return _entry_files_valid(device, entry)
 
 
 def reconcile(
@@ -210,9 +218,6 @@ def reconcile(
     if segment_minutes not in {0, 5, 10, 15}:
         raise ValueError("segment_minutes must be one of 0, 5, 10, 15")
     selected = list(dict.fromkeys(selected_uuids))
-    unknown = [uuid for uuid in selected if uuid not in catalog]
-    if unknown:
-        raise ValueError(f"Unknown/non-downloaded episode UUID(s): {', '.join(unknown[:3])}")
 
     def emit(**kwargs):
         if progress:
@@ -223,6 +228,25 @@ def reconcile(
     manifest = recover_pending(device, manifest)
     current = manifest["episodes"]
     selected_set = set(selected)
+
+    # A managed episode may no longer be downloaded in Apple Podcasts. It can
+    # safely stay on the device as long as its existing files are intact and
+    # its processing settings do not need to change. This also lets the UI
+    # expose it so the user can untick and delete it.
+    missing_sources = [uuid for uuid in selected if uuid not in catalog]
+    for uuid in missing_sources:
+        entry = current.get(uuid)
+        if not isinstance(entry, dict):
+            raise ValueError(f"Episode {uuid} is not downloaded and is not already managed on the device")
+        if entry.get("preset") != preset_name or entry.get("segment_minutes") != segment_minutes:
+            raise ValueError(
+                f"{entry.get('title', uuid)} is no longer downloaded in Apple Podcasts; "
+                "redownload it or untick it before changing processing settings"
+            )
+        if not _entry_files_valid(device, entry):
+            raise ValueError(
+                f"{entry.get('title', uuid)} is no longer downloaded and its managed device files are incomplete"
+            )
 
     # Removals first: each transaction is journalled before deletion.
     for uuid in sorted(set(current) - selected_set):
@@ -238,6 +262,10 @@ def reconcile(
 
     total = len(selected)
     for index, uuid in enumerate(selected, start=1):
+        if uuid not in catalog:
+            entry = manifest["episodes"][uuid]
+            emit(phase="kept", episode_uuid=uuid, index=index, total=total, message=f"Kept on device (source no longer downloaded): {entry.get('title', uuid)}")
+            continue
         episode = catalog[uuid]
         signature = _processing_signature(episode, preset_name, segment_minutes)
         existing = manifest["episodes"].get(uuid)

@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import secrets
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -112,11 +113,27 @@ class Handler(BaseHTTPRequestHandler):
                     manifest = {"episodes": {}}
                     manifest_error = str(exc)
                 synced = set(manifest.get("episodes", {}))
+                episode_rows = [{**e.json(), "synced": e.uuid in synced, "source_missing": False} for e in catalog.values()]
+                for uuid in sorted(synced - set(catalog)):
+                    entry = manifest.get("episodes", {}).get(uuid, {})
+                    episode_rows.append({
+                        "uuid": uuid,
+                        "title": entry.get("title", uuid),
+                        "show": entry.get("show", "Unknown Podcast"),
+                        "author": "",
+                        "published_at": None,
+                        "duration_seconds": 0,
+                        "source_path": "",
+                        "source_size": 0,
+                        "source_mtime_ns": 0,
+                        "synced": True,
+                        "source_missing": True,
+                    })
                 with self.app.lock:
                     status = dict(self.app.sync_status)
                 self._json({
                     "device": device_info(self.app.device),
-                    "episodes": [{**e.json(), "synced": e.uuid in synced} for e in catalog.values()],
+                    "episodes": episode_rows,
                     "selected": list(synced),
                     "presets": {key: {"name": val.name, "description": val.description, "lufs": val.loudness_lufs} for key, val in PRESETS.items()},
                     "defaults": manifest.get("settings", {"preset": "swim", "segment_minutes": 10}),
@@ -240,6 +257,7 @@ def main(argv=None):
         pass
     finally:
         server.server_close()
+        shutil.rmtree(app.preview_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

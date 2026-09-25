@@ -76,6 +76,32 @@ class DeviceTests(unittest.TestCase):
             recovered=recover_pending(d,manifest)
             self.assertTrue(old.exists()); self.assertFalse(new.exists()); self.assertIsNone(recovered['pending'])
 
+
+    def test_managed_missing_source_can_be_kept_or_unselected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); d=root/'device'; d.mkdir(); src=root/'source.mp3'; src.write_bytes(b'source'); e=ep(src)
+            def fake_process(source,out,base,preset_name,segment_minutes):
+                p=out/f'{base}_p001.mp3'; p.write_bytes(b'processed'); return [p]
+            with patch('podcast_swim.device.process_episode',fake_process):
+                reconcile(d,{e.uuid:e},[e.uuid],'swim',10)
+            # Source disappears from Apple Podcasts: keeping the same settings
+            # is valid and does not need the source.
+            reconcile(d,{},[e.uuid],'swim',10)
+            self.assertTrue(next(d.glob('PSP_*.mp3')).exists())
+            # Unticking still removes every managed chunk.
+            reconcile(d,{},[],'swim',10)
+            self.assertFalse(list(d.glob('PSP_*.mp3')))
+
+    def test_managed_missing_source_cannot_be_reprocessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); d=root/'device'; d.mkdir(); src=root/'source.mp3'; src.write_bytes(b'source'); e=ep(src)
+            def fake_process(source,out,base,preset_name,segment_minutes):
+                p=out/f'{base}_p001.mp3'; p.write_bytes(b'processed'); return [p]
+            with patch('podcast_swim.device.process_episode',fake_process):
+                reconcile(d,{e.uuid:e},[e.uuid],'swim',10)
+            with self.assertRaisesRegex(ValueError,'no longer downloaded'):
+                reconcile(d,{},[e.uuid],'aggressive',10)
+
     def test_untracked_collision_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); d=root/'device'; d.mkdir(); src=root/'source.mp3'; src.write_bytes(b'source'); e=ep(src)
