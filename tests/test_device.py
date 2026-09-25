@@ -157,7 +157,7 @@ class DeviceTests(unittest.TestCase):
             for payload in (
                 {'version':1,'episodes':{},'pending':None,'settings':{'preset':'bogus','segment_minutes':10}},
                 {'version':1,'episodes':{},'pending':None,'settings':{'preset':'swim','segment_minutes':False}},
-                {'version':1,'episodes':{1:{'files':[]}},'pending':None,'settings':{'preset':'swim','segment_minutes':10}},
+                {'version':1,'episodes':{'U-1':[]},'pending':None,'settings':{'preset':'swim','segment_minutes':10}},
             ):
                 (d/MANIFEST_NAME).write_text(json.dumps(payload))
                 with self.assertRaises(ManifestError):

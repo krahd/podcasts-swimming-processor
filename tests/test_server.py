@@ -55,4 +55,3 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(handler._token(),'secret')
             finally:
                 shutil.rmtree(app.preview_dir,ignore_errors=True)
-

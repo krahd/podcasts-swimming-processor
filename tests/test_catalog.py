@@ -61,4 +61,3 @@ class CatalogTests(unittest.TestCase):
             eps=load_downloaded_episodes(db,cache)
             self.assertEqual(len(eps),1)
             self.assertEqual(Path(eps[0].source_path),newer)
-

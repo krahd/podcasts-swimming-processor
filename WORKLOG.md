@@ -9,4 +9,3 @@
 
 - 2026-09-24: Final acceptance: localhost state API previously returned 15 real downloaded episodes and writable RUN PLUS metadata without device mutation; rendered and measured a 30-second Swim preview from a real downloaded episode; full test suite passed. Prepared COMPLETE status for canonical integration.
 - 2026-09-25: Intensive second adversarial audit reproduced an unsafe same-fingerprint replacement defect (regenerated files could be deleted after copy) and an invalid-manifest preset acceptance defect. Implemented replacement-generation isolation, legacy-overlap recovery, stricter manifest ownership/schema checks, preflight setting validation, SQLite/cache hardening, eject/sync admission serialisation, safer token transport, interrupted-sync UI visibility, and new regression tests.
-
