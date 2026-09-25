@@ -1,6 +1,6 @@
 # Status
 
-- **Last verified checkpoint:** Empty GitHub repository identified; Mac environment and device mount discovery started.
-- **Current phase/task:** Bootstrap canonical repository and persistent execution state.
+- **Last verified checkpoint:** Final local acceptance passed: real Apple Podcasts catalogue/API smoke, real downloaded-episode Swim preview validation, live RUN PLUS read-only detection, and full automated test suite.
+- **Current phase/task:** COMPLETE
 - **Blocking issues:** none
-- **Exact next action:** Create a durable workspace job from the initial pushed commit and implement the grounded catalog/device/audio core; success means checkpointed tests pass in the workspace branch.
+- **Exact next action:** none; canonical integration and remote verification are the remaining publication gate for this workspace checkpoint.
