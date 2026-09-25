@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .audio import PRESETS, render_preview
 from .catalog import Episode, load_downloaded_episodes
-from .device import ManifestError, device_info, load_manifest, reconcile
+from .device import ManifestError, device_info, load_manifest, reconcile, validate_manifest_paths
 
 DEFAULT_DEVICE = Path("/Volumes/RUN PLUS")
 WEB_ROOT = Path(__file__).parent / "web"
@@ -109,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
                 manifest_error = None
                 try:
                     manifest = load_manifest(self.app.device)
+                    validate_manifest_paths(self.app.device, manifest)
                 except ManifestError as exc:
                     manifest = {"episodes": {}}
                     manifest_error = str(exc)
