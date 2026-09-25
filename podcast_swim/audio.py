@@ -84,6 +84,42 @@ def _run(command: list[str], timeout: int) -> None:
 
 
 
+def _packet_duration(path: Path) -> float | None:
+    """Best-effort duration from packet timestamps when format probing fails.
+
+    ``None`` means the file could not be characterised safely.  In that case
+    callers must preserve it rather than infer that it is empty.
+    """
+    result = subprocess.run(
+        [
+            find_ffprobe(), "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if result.returncode:
+        return None
+    starts: list[float] = []
+    ends: list[float] = []
+    try:
+        for line in result.stdout.splitlines():
+            fields = [part.strip() for part in line.split(",") if part.strip()]
+            if not fields:
+                continue
+            start = float(fields[0])
+            duration = float(fields[1]) if len(fields) > 1 else 0.0
+            starts.append(start)
+            ends.append(start + max(0.0, duration))
+    except ValueError:
+        return None
+    if not starts:
+        return 0.0
+    return max(0.0, max(ends) - min(starts))
+
+
 def _merge_tiny_tail(outputs: list[Path], segment_seconds: float) -> list[Path]:
     """Avoid a nearly-empty final track caused by encoder/packet rounding."""
     if len(outputs) < 2:
@@ -91,10 +127,16 @@ def _merge_tiny_tail(outputs: list[Path], segment_seconds: float) -> list[Path]:
     try:
         tail_duration = probe_duration(outputs[-1])
     except Exception:
-        # Segment muxing can leave a header-only tail when the source ends
-        # exactly on a boundary. It contains no playable audio.
-        outputs[-1].unlink(missing_ok=True)
-        return outputs[:-1]
+        tail_duration = _packet_duration(outputs[-1])
+        if tail_duration is None:
+            # FFmpeg can emit a metadata/header-only MP3 at an exact segment
+            # boundary.  Such files are tiny and unreadable by both probes.
+            # Remove only that narrowly characterised artefact; preserve any
+            # larger uncharacterised tail rather than risk data loss.
+            if outputs[-1].stat().st_size <= 4096:
+                outputs[-1].unlink(missing_ok=True)
+                return outputs[:-1]
+            return outputs
     threshold = min(30.0, max(2.0, segment_seconds * 0.10))
     if tail_duration >= threshold:
         return outputs

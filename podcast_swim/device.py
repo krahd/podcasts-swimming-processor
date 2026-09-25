@@ -15,6 +15,7 @@ from .catalog import Episode
 MANIFEST_NAME = ".podcasts-swimming-processor.json"
 PREFIX = "PSP_"
 MANIFEST_VERSION = 1
+PROCESSING_VERSION = 2
 SAFE_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
@@ -30,8 +31,8 @@ def sanitize(text: str, max_len: int = 52) -> str:
 
 def device_filename_base(episode: Episode, preset_name: str, segment_minutes: int) -> str:
     date = (episode.published_at or "00000000")[:10].replace("-", "")
-    signature = f"{episode.source_size}:{episode.source_mtime_ns}:{preset_name}:{segment_minutes}"
-    fingerprint = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:8]
+    signature = f"{episode.uuid}:{episode.source_size}:{episode.source_mtime_ns}:{preset_name}:{segment_minutes}"
+    fingerprint = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:12]
     return (
         f"{PREFIX}{date}_{sanitize(episode.show, 32)}_"
         f"{sanitize(episode.title, 54)}_{episode.uuid[:8]}_{fingerprint}"
@@ -61,6 +62,13 @@ def load_manifest(device: Path) -> dict:
     if payload.get("pending") is not None and not isinstance(payload.get("pending"), dict):
         raise ManifestError("Managed-device manifest has invalid pending state")
     payload.setdefault("settings", {"preset": "swim", "segment_minutes": 10})
+    settings = payload.get("settings")
+    if not isinstance(settings, dict):
+        raise ManifestError("Managed-device manifest has invalid settings")
+    preset_name = settings.get("preset", "swim")
+    segment_minutes = settings.get("segment_minutes", 10)
+    if not isinstance(preset_name, str) or segment_minutes not in {0, 5, 10, 15}:
+        raise ManifestError("Managed-device manifest has invalid settings")
     return payload
 
 
@@ -133,12 +141,17 @@ def recover_pending(device: Path, manifest: dict) -> dict:
         if not isinstance(new_entry, dict):
             raise ManifestError("Pending replace transaction is malformed")
         new_files = list(new_entry.get("files") or [])
-        complete = bool(new_files) and all(
-            _owned_path(device, item["name"]).is_file()
-            and _owned_path(device, item["name"]).stat().st_size == int(item["size"])
-            for item in new_files
-            if isinstance(item, dict) and "name" in item and "size" in item
-        ) and len(new_files) == sum(1 for item in new_files if isinstance(item, dict) and "name" in item and "size" in item)
+        complete = bool(new_files)
+        for item in new_files:
+            if not isinstance(item, dict) or "name" not in item or "size" not in item:
+                raise ManifestError("Pending replace transaction has a malformed file entry")
+            try:
+                expected_size = int(item["size"])
+            except (TypeError, ValueError) as exc:
+                raise ManifestError("Pending replace transaction has an invalid file size") from exc
+            target = _owned_path(device, item["name"])
+            if not target.is_file() or target.stat().st_size != expected_size:
+                complete = False
         if complete:
             _remove_owned(device, old_files)
             manifest["episodes"][uuid] = new_entry
@@ -150,7 +163,7 @@ def recover_pending(device: Path, manifest: dict) -> dict:
                     target = _owned_path(device, item["name"])
                     if target.exists():
                         target.unlink()
-                    partial = device / (item["name"] + ".partial")
+                    partial = _owned_path(device, item["name"] + ".partial")
                     if partial.exists():
                         partial.unlink()
         manifest["pending"] = None
@@ -175,6 +188,7 @@ def device_info(device: Path) -> dict:
 
 def _processing_signature(episode: Episode, preset_name: str, segment_minutes: int) -> dict:
     return {
+        "processing_version": PROCESSING_VERSION,
         "source_size": episode.source_size,
         "source_mtime_ns": episode.source_mtime_ns,
         "preset": preset_name,
@@ -279,6 +293,9 @@ def reconcile(
             base = device_filename_base(episode, preset_name, segment_minutes)
             outputs = process_episode(Path(episode.source_path), out_dir, base, preset_name, segment_minutes)
             files = [{"name": p.name, "size": p.stat().st_size} for p in outputs]
+            names = [item["name"] for item in files]
+            if len(names) != len(set(names)):
+                raise RuntimeError("Audio processor produced duplicate output filenames")
             needed = sum(item["size"] for item in files)
             free = shutil.disk_usage(device).free
             if needed + 8 * 1024 * 1024 > free:
@@ -293,18 +310,24 @@ def reconcile(
             old_files = []
             if existing:
                 old_files = [item.get("name") for item in existing.get("files", []) if isinstance(item, dict) and item.get("name")]
-            known_owned = {
-                item.get("name")
-                for owned_entry in manifest["episodes"].values()
-                if isinstance(owned_entry, dict)
-                for item in owned_entry.get("files", [])
-                if isinstance(item, dict)
-            }
+            owned_by: dict[str, str] = {}
+            for owner_uuid, owned_entry in manifest["episodes"].items():
+                if not isinstance(owned_entry, dict):
+                    continue
+                for owned_item in owned_entry.get("files", []):
+                    if isinstance(owned_item, dict) and isinstance(owned_item.get("name"), str):
+                        name = owned_item["name"]
+                        previous_owner = owned_by.setdefault(name, owner_uuid)
+                        if previous_owner != owner_uuid:
+                            raise ManifestError(f"Managed filename is claimed by multiple episodes: {name}")
             for item in files:
                 target = _owned_path(device, item["name"])
-                partial = device / (item["name"] + ".partial")
-                if target.exists() and item["name"] not in known_owned:
+                partial = _owned_path(device, item["name"] + ".partial")
+                owner = owned_by.get(item["name"])
+                if target.exists() and owner is None:
                     raise ManifestError(f"Refusing to overwrite an untracked device file: {item['name']}")
+                if target.exists() and owner != uuid:
+                    raise ManifestError(f"Refusing to overwrite a file managed by another episode: {item['name']}")
                 if partial.exists():
                     raise ManifestError(f"Refusing to overwrite an untracked partial file: {partial.name}")
             manifest["pending"] = {"type": "replace", "uuid": uuid, "new_entry": new_entry, "old_files": old_files}

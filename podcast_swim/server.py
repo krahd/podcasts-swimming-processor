@@ -27,6 +27,7 @@ class RuntimeState:
     device: Path
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     lock: threading.RLock = field(default_factory=threading.RLock)
+    preview_lock: threading.Lock = field(default_factory=threading.Lock)
     sync_status: dict = field(default_factory=lambda: {"running": False, "phase": "idle", "message": "Ready"})
     preview_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="podcast-swim-preview-")))
     catalog_cache: dict[str, Episode] = field(default_factory=dict)
@@ -41,6 +42,19 @@ class RuntimeState:
         with self.lock:
             self.sync_status.update(payload)
             self.sync_status["running"] = payload.get("phase") not in {"complete", "error", "idle"}
+            if payload.get("phase") in {"starting", "complete"}:
+                self.sync_status.pop("error", None)
+
+    def begin_sync(self) -> bool:
+        with self.lock:
+            if self.sync_status.get("running"):
+                return False
+            self.sync_status = {"running": True, "phase": "starting", "message": "Starting sync"}
+            return True
+
+    def status_snapshot(self) -> dict:
+        with self.lock:
+            return dict(self.sync_status)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -92,6 +108,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -145,8 +163,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 500)
             return
         if parsed.path == "/api/status":
-            with self.app.lock:
-                self._json(dict(self.app.sync_status))
+            self._json(self.app.status_snapshot())
             return
         if parsed.path.startswith("/preview/"):
             name = Path(parsed.path.removeprefix("/preview/")).name
@@ -168,10 +185,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
             return
         if parsed.path == "/api/sync":
-            with self.app.lock:
-                if self.app.sync_status.get("running"):
-                    self._json({"error": "A sync is already running"}, 409)
-                    return
             selected = payload.get("selected")
             preset_name = payload.get("preset", "swim")
             segment_minutes = payload.get("segment_minutes", 10)
@@ -181,10 +194,17 @@ class Handler(BaseHTTPRequestHandler):
             if preset_name not in PRESETS or segment_minutes not in {0, 5, 10, 15}:
                 self._json({"error": "Invalid processing settings"}, 400)
                 return
-            catalog = self.app.refresh_catalog()
+            if not self.app.begin_sync():
+                self._json({"error": "A sync is already running"}, 409)
+                return
+            try:
+                catalog = self.app.refresh_catalog()
+            except Exception as exc:
+                self.app.status_update({"phase": "error", "message": str(exc), "error": str(exc)})
+                self._json({"error": str(exc)}, 500)
+                return
             def worker():
                 try:
-                    self.app.status_update({"running": True, "phase": "starting", "message": "Starting sync"})
                     reconcile(self.app.device, catalog, selected, preset_name, segment_minutes, self.app.status_update)
                 except Exception as exc:
                     self.app.status_update({"running": False, "phase": "error", "message": str(exc), "error": str(exc)})
@@ -204,13 +224,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "Episode is no longer downloaded"}, 404)
                 return
             try:
-                name = f"preview-{secrets.token_hex(6)}.mp3"
-                for stale in self.app.preview_dir.glob("preview-*.mp3"):
-                    try:
-                        stale.unlink()
-                    except OSError:
-                        pass
-                render_preview(Path(episode.source_path), self.app.preview_dir / name, preset_name)
+                name = f"preview-{secrets.token_hex(12)}.mp3"
+                with self.app.preview_lock:
+                    render_preview(Path(episode.source_path), self.app.preview_dir / name, preset_name)
+                    for stale in self.app.preview_dir.glob("preview-*.mp3"):
+                        if stale.name == name:
+                            continue
+                        try:
+                            stale.unlink()
+                        except OSError:
+                            pass
                 self._json({"url": f"/preview/{name}?token={urllib.parse.quote(self.app.token)}"})
             except Exception as exc:
                 self._json({"error": str(exc)}, 500)

@@ -111,3 +111,24 @@ class DeviceTests(unittest.TestCase):
             with patch('podcast_swim.device.process_episode',fake_process):
                 with self.assertRaises(ManifestError): reconcile(d,{e.uuid:e},[e.uuid],'swim',10)
             self.assertEqual(collision.read_bytes(),b'untracked')
+
+
+    def test_filename_fingerprint_distinguishes_full_uuid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src=Path(tmp)/'s'; src.write_bytes(b'x')
+            a=ep(src,uuid='ABCDEFGH-1111-2222-3333-444444444444',mtime=1)
+            b=ep(src,uuid='ABCDEFGH-9999-2222-3333-444444444444',mtime=1)
+            self.assertNotEqual(device_filename_base(a,'swim',10),device_filename_base(b,'swim',10))
+
+    def test_pending_invalid_size_fails_as_manifest_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); name='PSP_new_p001.mp3'; (d/name).write_bytes(b'x')
+            manifest={'version':1,'episodes':{},'pending':{'type':'replace','uuid':'U-1','old_files':[],'new_entry':{'files':[{'name':name,'size':'bad'}]}}}
+            with self.assertRaises(ManifestError):
+                recover_pending(d,manifest)
+
+    def test_manifest_rejects_invalid_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp); (d/MANIFEST_NAME).write_text(json.dumps({'version':1,'episodes':{},'pending':None,'settings':{'preset':'swim','segment_minutes':999}}))
+            with self.assertRaises(ManifestError):
+                load_manifest(d)

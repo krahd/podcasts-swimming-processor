@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from podcast_swim.audio import PRESETS, find_ffmpeg, process_episode, probe_duration
+from unittest.mock import patch
+
+from podcast_swim.audio import PRESETS, _merge_tiny_tail, find_ffmpeg, process_episode, probe_duration
 
 
 @unittest.skipUnless(shutil.which('ffmpeg') or Path('/opt/homebrew/bin/ffmpeg').exists(), 'ffmpeg unavailable')
@@ -21,3 +23,25 @@ class AudioTests(unittest.TestCase):
                 one=process_episode(src,root/name,f'PSP_{name}',name,0)
                 self.assertEqual(len(one),1)
                 self.assertGreater(one[0].stat().st_size,0)
+
+
+class AudioRecoveryTests(unittest.TestCase):
+    def test_tiny_unprobeable_tail_is_discarded(self):
+        from unittest.mock import patch
+        from podcast_swim.audio import _merge_tiny_tail
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); first=root/'p1.mp3'; tail=root/'p2.mp3'
+            first.write_bytes(b'x' * 8192); tail.write_bytes(b'header')
+            with patch('podcast_swim.audio.probe_duration', side_effect=RuntimeError('bad probe')), \
+                 patch('podcast_swim.audio._packet_duration', return_value=None):
+                result=_merge_tiny_tail([first,tail],600)
+            self.assertEqual(result,[first])
+            self.assertFalse(tail.exists())
+
+    def test_probe_failure_does_not_drop_final_segment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); a=root/'a.mp3'; b=root/'b.mp3'; a.write_bytes(b'a' * 8192); b.write_bytes(b'b' * 8192)
+            with patch('podcast_swim.audio.probe_duration', side_effect=RuntimeError('probe failed')):
+                outputs=_merge_tiny_tail([a,b],600)
+            self.assertEqual(outputs,[a,b])
+            self.assertTrue(b.exists())
