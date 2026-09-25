@@ -400,13 +400,32 @@ def reconcile(
             emit(phase="kept", episode_uuid=uuid, index=index, total=total, message=f"Already current: {episode.title}")
             continue
 
-        emit(phase="processing", episode_uuid=uuid, index=index, total=total, message=f"Processing: {episode.title}")
+        initial_overall = ((index - 1) / total) if total else 0.0
+        emit(
+            phase="processing", episode_uuid=uuid, index=index, total=total,
+            episode_progress=0.0, overall_progress=initial_overall,
+            message=f"Processing: {episode.title}",
+        )
         with tempfile.TemporaryDirectory(prefix="podcast-swim-audio-") as tmp:
             out_dir = Path(tmp)
             base = device_filename_base(
                 episode, preset_name, segment_minutes, _replacement_salt(existing)
             )
-            outputs = process_episode(Path(episode.source_path), out_dir, base, preset_name, segment_minutes)
+            def audio_progress(info: dict) -> None:
+                fraction = max(0.0, min(1.0, float(info.get("fraction", 0.0))))
+                overall = ((index - 1) + fraction) / total if total else fraction
+                emit(
+                    phase="processing", episode_uuid=uuid, index=index, total=total,
+                    episode_progress=fraction, overall_progress=overall,
+                    processed_seconds=info.get("processed_seconds"),
+                    duration_seconds=info.get("duration_seconds"),
+                    eta_seconds=info.get("eta_seconds"),
+                    message=f"Processing: {episode.title}",
+                )
+            outputs = process_episode(
+                Path(episode.source_path), out_dir, base, preset_name, segment_minutes,
+                progress=audio_progress,
+            )
             files = [{"name": p.name, "size": p.stat().st_size} for p in outputs]
             names = [item["name"] for item in files]
             if len(names) != len(set(names)):

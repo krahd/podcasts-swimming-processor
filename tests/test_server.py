@@ -99,3 +99,15 @@ class ServerTests(unittest.TestCase):
             popen.assert_called_once()
             self.assertEqual(popen.call_args.args[0][:2], ["/usr/bin/open", "http://127.0.0.1:8765/#token=x"])
             fallback.assert_not_called()
+
+    def test_status_update_clears_stale_progress_fields(self):
+        app = RuntimeState(Path("/tmp/nonexistent"))
+        try:
+            app.status_update({"phase": "processing", "episode_progress": 0.5, "eta_seconds": 10})
+            app.status_update({"phase": "kept", "message": "Already current"})
+            status = app.status_snapshot()
+            self.assertNotIn("episode_progress", status)
+            self.assertNotIn("eta_seconds", status)
+        finally:
+            shutil.rmtree(app.preview_dir, ignore_errors=True)
+

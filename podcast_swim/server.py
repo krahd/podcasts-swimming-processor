@@ -41,6 +41,9 @@ class RuntimeState:
 
     def status_update(self, payload: dict) -> None:
         with self.lock:
+            transient = {"episode_progress", "overall_progress", "eta_seconds", "processed_seconds", "duration_seconds"}
+            for key in transient - payload.keys():
+                self.sync_status.pop(key, None)
             self.sync_status.update(payload)
             self.sync_status["running"] = payload.get("phase") not in {"complete", "error", "idle"}
             if payload.get("phase") in {"starting", "complete"}:
@@ -73,7 +76,12 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.app  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args) -> None:
-        print(f"[web] {self.address_string()} - {fmt % args}")
+        rendered = fmt % args
+        # Old browser tabs can retain an expired token and poll /api/status.
+        # Ignore that repetitive local-only noise; the current tab still logs normally.
+        if '"GET /api/status HTTP/1.1" 403' in rendered:
+            return
+        print(f"[web] {self.address_string()} - {rendered}")
 
     def _token(self) -> str:
         header = self.headers.get("X-PSP-Token", "")
