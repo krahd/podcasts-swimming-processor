@@ -9,3 +9,7 @@
 
 - 2026-09-24: Final acceptance: localhost state API previously returned 15 real downloaded episodes and writable RUN PLUS metadata without device mutation; rendered and measured a 30-second Swim preview from a real downloaded episode; full test suite passed. Prepared COMPLETE status for canonical integration.
 - 2026-09-25: Intensive second adversarial audit reproduced an unsafe same-fingerprint replacement defect (regenerated files could be deleted after copy) and an invalid-manifest preset acceptance defect. Implemented replacement-generation isolation, legacy-overlap recovery, stricter manifest ownership/schema checks, preflight setting validation, SQLite/cache hardening, eject/sync admission serialisation, safer token transport, interrupted-sync UI visibility, and new regression tests.
+
+## 2026-09-25 — intensive second adversarial audit final verification
+
+Final verification after all repairs: the complete 32-test automated suite passed, Python compilation passed, `git diff --check` passed, and `run.command` passed `zsh -n`. ShellCheck was intentionally not used as a gate because it reports SC1071 for zsh scripts, which it does not support. A live read-only check found 15 downloaded Apple Podcasts episodes and confirmed `/Volumes/RUN PLUS` is connected and writable. No live device mutation was performed. The audit workspace is complete and ready for integration.
