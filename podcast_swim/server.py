@@ -6,6 +6,7 @@ import mimetypes
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -282,6 +283,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
+def open_browser(url: str) -> bool:
+    """Open the local UI reliably, preferring macOS LaunchServices."""
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(
+                ["/usr/bin/open", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except OSError:
+            pass
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Prepare Apple Podcasts episodes for swimming headphones")
     parser.add_argument("--device", type=Path, default=DEFAULT_DEVICE, help="mounted swimming-headphone volume")
@@ -301,10 +320,14 @@ def main(argv=None):
     # URL fragments are not sent in HTTP requests. The UI consumes and
     # removes this bootstrap token immediately, then authenticates APIs by header.
     url = f"http://127.0.0.1:{server.server_port}/#token={urllib.parse.quote(app.token)}"
-    print(f"Podcast Swimming Processor: {url}")
-    print(f"Device: {app.device}")
+    print(f"Podcast Swimming Processor: {url}", flush=True)
+    print(f"Device: {app.device}", flush=True)
+    print("Running. Keep this window open; press Control-C to stop.", flush=True)
     if not args.no_open:
-        threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+        def launch_browser() -> None:
+            if not open_browser(url):
+                print("Could not open the browser automatically. Open the URL above manually.", flush=True)
+        threading.Timer(0.3, launch_browser).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
